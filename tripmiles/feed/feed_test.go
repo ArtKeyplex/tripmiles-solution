@@ -5,6 +5,7 @@ import (
 
 	"tripmiles/deals"
 	"tripmiles/dealsvc"
+	"tripmiles/feed/lastknown"
 )
 
 // exampleDeals returns the 6 deals from the diagram in README.md.
@@ -28,7 +29,7 @@ func exampleDeals() *deals.Store {
 
 func newFeed() (*Feed, *dealsvc.Service) {
 	svc := dealsvc.NewService()
-	return &Feed{Deals: exampleDeals(), DealsSvc: svc.NewClient()}, svc
+	return New(exampleDeals(), svc.NewClient(), lastknown.New()), svc
 }
 
 func shows(list []deals.Deal, id string) bool {
@@ -95,6 +96,108 @@ func TestDealOverLimitIsHiddenWhenTheDealsServiceDoesNotAnswer(t *testing.T) {
 	svc.FailEveryNth = 1 // From now on, the service does not answer any request.
 	if shows(f.List(), "skyline-lisbon") {
 		t.Fatal("The Deals Service did not answer. Skyline Air: Berlin to Lisbon had reached its daily limit of 20. The deal is still on the list.")
+	}
+}
+
+func TestShortOutageUsesTheLastAnswer(t *testing.T) {
+	f, svc := newFeed()
+	book(f, "skyline-lisbon", 20)
+	f.List() // The service answers. The server keeps the answer.
+	svc.FailEveryNth = 1
+	list := f.List()
+	if shows(list, "skyline-lisbon") {
+		t.Fatal("The last answer says Skyline Air: Berlin to Lisbon reached its daily limit of 20. The deal is still on the list.")
+	}
+	if !shows(list, "skyline-rome") {
+		t.Fatal("The last answer says Skyline Air: Berlin to Rome has stays left. The deal is not on the list.")
+	}
+}
+
+func TestShortOutageCountsTheBookingsOfThisServer(t *testing.T) {
+	f, svc := newFeed()
+	book(f, "skyline-lisbon", 19)
+	f.List() // The last answer says 19 of 20.
+	svc.FailEveryNth = 1
+	if !shows(f.List(), "skyline-lisbon") {
+		t.Fatal("Skyline Air: Berlin to Lisbon has 1 stay left. The deal is not on the list.")
+	}
+	book(f, "skyline-lisbon", 1)
+	if shows(f.List(), "skyline-lisbon") {
+		t.Fatal("This server booked the last stay of Skyline Air: Berlin to Lisbon after the last answer. The deal is still on the list.")
+	}
+}
+
+func TestShortOutageCountsTheBookingsOfThisServerForTheTotalLimit(t *testing.T) {
+	svc := dealsvc.NewService()
+	store := deals.NewStore(
+		[]deals.Deal{{ID: "total", PartnerID: "p", TotalLimit: 5}},
+		[]deals.Partner{{ID: "p"}},
+	)
+	f := New(store, svc.NewClient(), lastknown.New())
+	book(f, "total", 4)
+	f.List() // The last answer says 4 of 5.
+	svc.FailEveryNth = 1
+	if !shows(f.List(), "total") {
+		t.Fatal("The deal has 1 stay left of its total limit. The deal is not on the list.")
+	}
+	book(f, "total", 1)
+	if shows(f.List(), "total") {
+		t.Fatal("This server booked the last stay of the total limit after the last answer. The deal is still on the list.")
+	}
+}
+
+func TestShortOutageCountsTheBookingsOfThisServerForThePartnerLimit(t *testing.T) {
+	f, svc := newFeed()
+	book(f, "nordic-oslo", 29)
+	f.List() // The last answer says Nordic Air has 29 of 30.
+	svc.FailEveryNth = 1
+	if !shows(f.List(), "nordic-stockholm") {
+		t.Fatal("Nordic Air has 1 stay left. Munich to Stockholm is not on the list.")
+	}
+	book(f, "nordic-oslo", 1)
+	if shows(f.List(), "nordic-stockholm") {
+		t.Fatal("This server booked the last stay of Nordic Air after the last answer. Munich to Stockholm is still on the list.")
+	}
+}
+
+func TestDealIsHiddenWhenItsTotalLimitIsReached(t *testing.T) {
+	svc := dealsvc.NewService()
+	store := deals.NewStore(
+		[]deals.Deal{{ID: "total", PartnerID: "p", TotalLimit: 5}},
+		[]deals.Partner{{ID: "p"}},
+	)
+	f := New(store, svc.NewClient(), lastknown.New())
+	book(f, "total", 5)
+	if shows(f.List(), "total") {
+		t.Fatal("The deal has 5 bookings. Its total limit is 5. The deal is still on the list.")
+	}
+}
+
+func TestUnconfirmedBookingsCountForThePartner(t *testing.T) {
+	f, _ := newFeed()
+	book(f, "nordic-oslo", 30) // No booking is confirmed yet.
+	if shows(f.List(), "nordic-stockholm") {
+		t.Fatal("Nordic Air has 30 unconfirmed bookings. Its partner daily limit is 30. Munich to Stockholm is still on the list.")
+	}
+}
+
+func TestWithoutAnyAnswerOnlyDealsWithoutALimitAreShown(t *testing.T) {
+	svc := dealsvc.NewService()
+	svc.FailEveryNth = 1 // The service never answers this server.
+	store := deals.NewStore(
+		[]deals.Deal{
+			{ID: "limited", PartnerID: "p", DailyLimit: 100},
+			{ID: "unlimited", PartnerID: "p"},
+		},
+		[]deals.Partner{{ID: "p"}},
+	)
+	f := New(store, svc.NewClient(), lastknown.New())
+	list := f.List()
+	if shows(list, "limited") {
+		t.Fatal("The service never answered. A deal with a limit is on the list.")
+	}
+	if !shows(list, "unlimited") {
+		t.Fatal("A deal without a limit can never go over it. It is not on the list.")
 	}
 }
 

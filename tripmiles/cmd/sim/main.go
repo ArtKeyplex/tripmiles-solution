@@ -12,6 +12,7 @@ import (
 	"tripmiles/deals"
 	"tripmiles/dealsvc"
 	"tripmiles/feed"
+	"tripmiles/feed/lastknown"
 )
 
 const (
@@ -72,7 +73,7 @@ func playTheDay(store *deals.Store, svc *dealsvc.Service) results {
 		wg.Add(1)
 		go func(server int) {
 			defer wg.Done()
-			f := &feed.Feed{Deals: store, DealsSvc: svc.NewClient()}
+			f := feed.New(store, svc.NewClient(), lastknown.New())
 			for open := server; open < appOpens; open += servers {
 				minute := open * 24 * 60 / appOpens
 

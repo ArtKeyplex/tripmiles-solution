@@ -11,6 +11,13 @@ import (
 type Feed struct {
 	Deals    *deals.Store
 	DealsSvc *dealsvc.Client
+
+	lastKnown LastKnown // the fallback for when the Deals Service does not answer
+}
+
+// New returns the Feed of one app server.
+func New(ds *deals.Store, svc *dealsvc.Client, lastKnown LastKnown) *Feed {
+	return &Feed{Deals: ds, DealsSvc: svc, lastKnown: lastKnown}
 }
 
 // List runs each time a traveller opens the app.
@@ -22,4 +29,5 @@ func (f *Feed) List() []deals.Deal {
 // Book records that a traveller booked a deal.
 func (f *Feed) Book(d deals.Deal) {
 	f.DealsSvc.RecordBooking(d.ID, d.PartnerID)
+	f.lastKnown.AddBooking(d.ID, d.PartnerID)
 }
